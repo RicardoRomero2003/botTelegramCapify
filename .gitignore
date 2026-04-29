@@ -1,0 +1,27 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+coverage/
+
+# Logs
+*.log
+logs/
+
+# macOS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Temp
+*.tmp
+*.temp
+
+# TypeScript
+*.tsbuildinfo
