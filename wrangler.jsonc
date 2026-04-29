@@ -1,0 +1,19 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "capify-telegram-bot",
+	"main": "src/worker.ts",
+	"compatibility_date": "2026-04-29",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true,
+		"head_sampling_rate": 1
+	},
+	"kv_namespaces": [
+		{
+			"binding": "CAPIFY_BOT_SESSIONS",
+			"id": "11c0340ac38a41ffbeffb757976df8da"
+		}
+	]
+}
