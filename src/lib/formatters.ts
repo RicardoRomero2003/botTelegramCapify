@@ -34,6 +34,7 @@ export function formatWelcome(): string {
     "/login — iniciar sesion",
     "/logout — cerrar sesion",
     "/historial — ver los ultimos 20 gastos",
+    "/gasto — registrar un gasto guiado",
     "/mas — cargar los siguientes 20 gastos",
   ].join("\n");
 }

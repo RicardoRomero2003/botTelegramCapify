@@ -1,4 +1,4 @@
-import type { BotAuthSession, BotChatState } from "./lib/types.js";
+import type { BotAuthSession, BotChatState, ExpenseFlowState } from "./lib/types.js";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 
@@ -6,6 +6,7 @@ function createDefaultState(): BotChatState {
   return {
     auth: null,
     loginFlow: null,
+    expenseFlow: null,
     history: null,
   };
 }
@@ -32,6 +33,7 @@ export async function setAuthSession(env: Env, chatId: number, auth: BotAuthSess
   const state = await getChatState(env, chatId);
   state.auth = auth;
   state.loginFlow = null;
+  state.expenseFlow = null;
   state.history = null;
   await saveChatState(env, chatId, state);
 }
@@ -46,6 +48,7 @@ export async function clearAuthSession(env: Env, chatId: number): Promise<void> 
 export async function startLoginFlow(env: Env, chatId: number): Promise<void> {
   const state = await getChatState(env, chatId);
   state.loginFlow = { step: "usuario" };
+  state.expenseFlow = null;
   await saveChatState(env, chatId, state);
 }
 
@@ -58,6 +61,19 @@ export async function setLoginUsuario(env: Env, chatId: number, usuario: string)
 export async function clearLoginFlow(env: Env, chatId: number): Promise<void> {
   const state = await getChatState(env, chatId);
   state.loginFlow = null;
+  await saveChatState(env, chatId, state);
+}
+
+export async function setExpenseFlow(env: Env, chatId: number, expenseFlow: ExpenseFlowState): Promise<void> {
+  const state = await getChatState(env, chatId);
+  state.expenseFlow = expenseFlow;
+  state.loginFlow = null;
+  await saveChatState(env, chatId, state);
+}
+
+export async function clearExpenseFlow(env: Env, chatId: number): Promise<void> {
+  const state = await getChatState(env, chatId);
+  state.expenseFlow = null;
   await saveChatState(env, chatId, state);
 }
 

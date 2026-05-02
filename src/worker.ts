@@ -1,9 +1,27 @@
 import { formatExpenseHistory, formatLoggedUser, formatWelcome } from "./lib/formatters.js";
-import type { BotChatState } from "./lib/types.js";
+import type {
+  BotChatState,
+  ExpenseCategory,
+  ExpenseDraft,
+  ExpenseFlowState,
+  ExpenseKind,
+  ExpensePaymentMethod,
+  ExpenseTransportType,
+} from "./lib/types.js";
 import { buildSignedHistoryCursor, buildWebhookSecret, parseSignedHistoryCursor } from "./worker-crypto.js";
-import { getExpenseHistoryPage } from "./worker-capify-api.js";
+import { createFinancialExpense, getExpenseHistoryPage } from "./worker-capify-api.js";
 import { getWorkerConfig } from "./worker-config.js";
-import { clearAuthSession, clearLoginFlow, getChatState, setAuthSession, setHistoryCursor, setLoginUsuario, startLoginFlow } from "./worker-session-store.js";
+import {
+  clearAuthSession,
+  clearExpenseFlow,
+  clearLoginFlow,
+  getChatState,
+  setAuthSession,
+  setExpenseFlow,
+  setHistoryCursor,
+  setLoginUsuario,
+  startLoginFlow,
+} from "./worker-session-store.js";
 import { signInWithSupabase } from "./worker-supabase.js";
 import { answerCallbackQuery, deleteMessage, sendMessage } from "./worker-telegram.js";
 
@@ -30,6 +48,23 @@ type TelegramUpdate = {
   callback_query?: TelegramCallbackQuery;
 };
 
+const EXPENSE_CALLBACK_PREFIX = "expense";
+const EXPENSE_CATEGORIES: ExpenseCategory[] = ["DEPORTE", "TRANSPORTE", "OCIO", "COMIDA", "OTROS"];
+const TRANSPORT_TYPES: ExpenseTransportType[] = ["Transporte Publico", "Uber", "Gasolina"];
+const EXPENSE_KINDS: ExpenseKind[] = ["MENSUALIDAD", "PUNTUAL"];
+const PAYMENT_METHODS: ExpensePaymentMethod[] = ["Cuenta de gastos", "Tarjeta de Ineco"];
+
+const TRANSPORT_CALLBACK_VALUES: Record<string, ExpenseTransportType> = {
+  TRANSPORTE_PUBLICO: "Transporte Publico",
+  UBER: "Uber",
+  GASOLINA: "Gasolina",
+};
+
+const PAYMENT_CALLBACK_VALUES: Record<string, ExpensePaymentMethod> = {
+  CUENTA_GASTOS: "Cuenta de gastos",
+  TARJETA_INECO: "Tarjeta de Ineco",
+};
+
 function isChatAllowed(config: ReturnType<typeof getWorkerConfig>, chatId: number): boolean {
   if (config.telegramAllowedChatIds.size === 0) return true;
   return config.telegramAllowedChatIds.has(chatId);
@@ -44,26 +79,75 @@ function assertPrivateChat(config: ReturnType<typeof getWorkerConfig>, chatId: n
   }
 }
 
-async function historyKeyboard(secret: string, nextOffset: number) {
+function buildExpenseCallback(action: string, value?: string): string {
+  return value ? `${EXPENSE_CALLBACK_PREFIX}:${action}:${value}` : `${EXPENSE_CALLBACK_PREFIX}:${action}`;
+}
+
+function parseExpenseCallback(value: string): { action: string; value: string | null } | null {
+  const parts = value.split(":");
+  if (parts[0] !== EXPENSE_CALLBACK_PREFIX || parts.length < 2) return null;
   return {
-    inline_keyboard: [[{ text: "Mas gastos", callback_data: await buildSignedHistoryCursor(nextOffset, secret) }]],
+    action: parts[1] ?? "",
+    value: parts.slice(2).join(":") || null,
   };
 }
 
-async function sendHistoryPage(env: Env, chatId: number, offset: number): Promise<{ text: string; nextOffset: number; exhausted: boolean }> {
-  const state = await getChatState(env, chatId);
-  if (!state.auth) {
-    throw new Error("Debes iniciar sesion primero con /login.");
-  }
-
-  const page = await getExpenseHistoryPage(state.auth, offset, 20, env);
-  await setHistoryCursor(env, chatId, page.nextOffset, page.exhausted);
-  await setAuthSession(env, chatId, state.auth);
-
+function categoryKeyboard() {
   return {
-    text: formatExpenseHistory(page, offset),
-    nextOffset: page.nextOffset,
-    exhausted: page.exhausted,
+    inline_keyboard: [
+      [{ text: "DEPORTE", callback_data: buildExpenseCallback("category", "DEPORTE") }],
+      [{ text: "TRANSPORTE", callback_data: buildExpenseCallback("category", "TRANSPORTE") }],
+      [{ text: "OCIO", callback_data: buildExpenseCallback("category", "OCIO") }],
+      [{ text: "COMIDA", callback_data: buildExpenseCallback("category", "COMIDA") }],
+      [{ text: "OTROS", callback_data: buildExpenseCallback("category", "OTROS") }],
+      [{ text: "Cancelar", callback_data: buildExpenseCallback("cancel") }],
+    ],
+  };
+}
+
+function transportKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Transporte Publico", callback_data: buildExpenseCallback("transport", "TRANSPORTE_PUBLICO") }],
+      [{ text: "Uber", callback_data: buildExpenseCallback("transport", "UBER") }],
+      [{ text: "Gasolina", callback_data: buildExpenseCallback("transport", "GASOLINA") }],
+      [{ text: "Cancelar", callback_data: buildExpenseCallback("cancel") }],
+    ],
+  };
+}
+
+function kindKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Mensualidad", callback_data: buildExpenseCallback("kind", "MENSUALIDAD") }],
+      [{ text: "Puntual", callback_data: buildExpenseCallback("kind", "PUNTUAL") }],
+      [{ text: "Cancelar", callback_data: buildExpenseCallback("cancel") }],
+    ],
+  };
+}
+
+function paymentKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Cuenta de gastos", callback_data: buildExpenseCallback("payment", "CUENTA_GASTOS") }],
+      [{ text: "Tarjeta de Ineco", callback_data: buildExpenseCallback("payment", "TARJETA_INECO") }],
+      [{ text: "Cancelar", callback_data: buildExpenseCallback("cancel") }],
+    ],
+  };
+}
+
+function confirmKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Confirmar", callback_data: buildExpenseCallback("confirm") }],
+      [{ text: "Cancelar", callback_data: buildExpenseCallback("cancel") }],
+    ],
+  };
+}
+
+async function historyKeyboard(secret: string, nextOffset: number) {
+  return {
+    inline_keyboard: [[{ text: "Mas gastos", callback_data: await buildSignedHistoryCursor(nextOffset, secret) }]],
   };
 }
 
@@ -74,6 +158,128 @@ function normalizeCommand(text: string): { command: string; args: string[] } | n
   const rawCommand = parts[0]?.slice(1) ?? "";
   const command = rawCommand.split("@")[0]?.toLowerCase() ?? "";
   return { command, args: parts.slice(1) };
+}
+
+function formatAmount(value: number): string {
+  return new Intl.NumberFormat("es-ES", {
+    style: "currency",
+    currency: "EUR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function parsePrice(raw: string): number | null {
+  const normalized = Number(raw.replace(",", "."));
+  if (!Number.isFinite(normalized) || normalized <= 0) return null;
+  return normalized;
+}
+
+function parseDateToApiDate(raw: string): string | null {
+  const normalized = raw.trim();
+  if (!normalized) return null;
+
+  const slashPattern = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+  const isoPattern = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+  if (slashPattern.test(normalized)) {
+    const [, day, month, year] = normalized.match(slashPattern) ?? [];
+    if (!isValidDateParts(Number(year), Number(month), Number(day))) return null;
+    return `${year}-${month}-${day}`;
+  }
+
+  if (isoPattern.test(normalized)) {
+    const [, year, month, day] = normalized.match(isoPattern) ?? [];
+    if (!isValidDateParts(Number(year), Number(month), Number(day))) return null;
+    return `${year}-${month}-${day}`;
+  }
+
+  return null;
+}
+
+function isValidDateParts(year: number, month: number, day: number): boolean {
+  if (year < 1900 || year > 3000) return false;
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > 31) return false;
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function getNextStepAfterCategory(category: ExpenseCategory): ExpenseFlowState["step"] {
+  return category === "TRANSPORTE" ? "transport_type" : "name";
+}
+
+function getNextStepAfterName(category: ExpenseCategory): ExpenseFlowState["step"] {
+  return category === "OCIO" ? "location" : "price";
+}
+
+function buildExpenseSummary(draft: ExpenseDraft): string {
+  const lines = ["Resumen del gasto:", ""];
+  lines.push(`Categoria: ${draft.categoria ?? "-"}`);
+  if (draft.nombre) lines.push(`Nombre: ${draft.nombre}`);
+  if (draft.tipo_transporte) lines.push(`Tipo de transporte: ${draft.tipo_transporte}`);
+  if (draft.ubicacion) lines.push(`Ubicacion: ${draft.ubicacion}`);
+  if (typeof draft.precio === "number") lines.push(`Precio: ${formatAmount(draft.precio)}`);
+  if (draft.fecha) lines.push(`Fecha: ${draft.fecha}`);
+  if (draft.tipo) lines.push(`Tipo: ${draft.tipo}`);
+  if (draft.forma_pago) lines.push(`Forma de pago: ${draft.forma_pago}`);
+  lines.push("", "Confirma para guardar el gasto o cancela para descartarlo.");
+  return lines.join("\n");
+}
+
+async function sendExpenseStepPrompt(env: Env, chatId: number, flow: ExpenseFlowState): Promise<void> {
+  switch (flow.step) {
+    case "category":
+      await sendMessage(env, chatId, "Selecciona la categoria del gasto.", categoryKeyboard());
+      return;
+    case "name":
+      await sendMessage(env, chatId, "Introduce el nombre del gasto.");
+      return;
+    case "transport_type":
+      await sendMessage(env, chatId, "Selecciona el tipo de transporte.", transportKeyboard());
+      return;
+    case "location":
+      await sendMessage(env, chatId, "Introduce la ubicacion del gasto de ocio.");
+      return;
+    case "price":
+      await sendMessage(env, chatId, "Introduce el precio del gasto. Ejemplo: 12,50");
+      return;
+    case "date":
+      await sendMessage(env, chatId, "Introduce la fecha del gasto en formato DD/MM/AAAA o YYYY-MM-DD.");
+      return;
+    case "kind":
+      await sendMessage(env, chatId, "Selecciona el tipo de gasto.", kindKeyboard());
+      return;
+    case "payment_method":
+      await sendMessage(env, chatId, "Selecciona la forma de pago.", paymentKeyboard());
+      return;
+    case "confirm":
+      await sendMessage(env, chatId, buildExpenseSummary(flow.draft), confirmKeyboard());
+      return;
+  }
+}
+
+async function transitionExpenseFlow(env: Env, chatId: number, flow: ExpenseFlowState): Promise<void> {
+  await setExpenseFlow(env, chatId, flow);
+  await sendExpenseStepPrompt(env, chatId, flow);
+}
+
+async function sendHistoryPage(env: Env, chatId: number, offset: number): Promise<{ text: string; nextOffset: number; exhausted: boolean }> {
+  const state = await getChatState(env, chatId);
+  if (!state.auth) {
+    throw new Error("Debes iniciar sesion primero con /login.");
+  }
+
+  const page = await getExpenseHistoryPage(state.auth, offset, 20, env);
+  await setAuthSession(env, chatId, state.auth);
+  await setHistoryCursor(env, chatId, page.nextOffset, page.exhausted);
+
+  return {
+    text: formatExpenseHistory(page, offset),
+    nextOffset: page.nextOffset,
+    exhausted: page.exhausted,
+  };
 }
 
 async function handleLoginFlowText(env: Env, state: BotChatState, chatId: number, message: TelegramMessage): Promise<boolean> {
@@ -113,6 +319,68 @@ async function handleLoginFlowText(env: Env, state: BotChatState, chatId: number
   return true;
 }
 
+async function handleExpenseFlowText(env: Env, state: BotChatState, chatId: number, message: TelegramMessage): Promise<boolean> {
+  const flow = state.expenseFlow;
+  if (!flow || !message.text) return false;
+
+  const text = message.text.trim();
+  if (!text) {
+    await sendMessage(env, chatId, "Texto vacio. Intentalo otra vez.");
+    return true;
+  }
+
+  switch (flow.step) {
+    case "name": {
+      await transitionExpenseFlow(env, chatId, {
+        step: getNextStepAfterName(flow.draft.categoria as ExpenseCategory),
+        draft: { ...flow.draft, nombre: text },
+      });
+      return true;
+    }
+    case "location": {
+      await transitionExpenseFlow(env, chatId, {
+        step: "price",
+        draft: { ...flow.draft, ubicacion: text },
+      });
+      return true;
+    }
+    case "price": {
+      const price = parsePrice(text);
+      if (price === null) {
+        await sendMessage(env, chatId, "Introduce un precio valido mayor que 0.");
+        return true;
+      }
+      await transitionExpenseFlow(env, chatId, {
+        step: "date",
+        draft: { ...flow.draft, precio: price },
+      });
+      return true;
+    }
+    case "date": {
+      const apiDate = parseDateToApiDate(text);
+      if (!apiDate) {
+        await sendMessage(env, chatId, "Fecha invalida. Usa formato DD/MM/AAAA o YYYY-MM-DD.");
+        return true;
+      }
+      const category = flow.draft.categoria as ExpenseCategory;
+      if (category === "OTROS" || category === "COMIDA") {
+        await transitionExpenseFlow(env, chatId, {
+          step: "payment_method",
+          draft: { ...flow.draft, fecha: apiDate, tipo: "PUNTUAL" },
+        });
+        return true;
+      }
+      await transitionExpenseFlow(env, chatId, {
+        step: "kind",
+        draft: { ...flow.draft, fecha: apiDate },
+      });
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
 async function handleCommand(env: Env, chatId: number, message: TelegramMessage): Promise<boolean> {
   const config = getWorkerConfig(env);
   const text = message.text?.trim();
@@ -141,6 +409,7 @@ async function handleCommand(env: Env, chatId: number, message: TelegramMessage)
     }
     case "logout":
       await clearLoginFlow(env, chatId);
+      await clearExpenseFlow(env, chatId);
       await clearAuthSession(env, chatId);
       await sendMessage(env, chatId, "Sesion cerrada.");
       return true;
@@ -168,6 +437,15 @@ async function handleCommand(env: Env, chatId: number, message: TelegramMessage)
       await sendMessage(env, chatId, result.text, result.exhausted ? undefined : await historyKeyboard(config.botSessionSecret, result.nextOffset));
       return true;
     }
+    case "gasto": {
+      const state = await getChatState(env, chatId);
+      if (!state.auth) {
+        await sendMessage(env, chatId, "Debes iniciar sesion primero con /login.");
+        return true;
+      }
+      await transitionExpenseFlow(env, chatId, { step: "category", draft: {} });
+      return true;
+    }
     default:
       return false;
   }
@@ -178,12 +456,153 @@ async function handleMessage(env: Env, message: TelegramMessage): Promise<void> 
   const chatId = message.chat.id;
   assertPrivateChat(config, chatId, message.chat.type);
 
+  const handledCommand = await handleCommand(env, chatId, message);
+  if (handledCommand) return;
+
   const state = await getChatState(env, chatId);
   const handledLogin = await handleLoginFlowText(env, state, chatId, message);
   if (handledLogin) return;
 
-  const handledCommand = await handleCommand(env, chatId, message);
-  if (handledCommand) return;
+  const handledExpenseFlow = await handleExpenseFlowText(env, state, chatId, message);
+  if (handledExpenseFlow) return;
+}
+
+async function handleExpenseCallback(env: Env, chatId: number, callbackQueryId: string, callbackData: string): Promise<boolean> {
+  const parsed = parseExpenseCallback(callbackData);
+  if (!parsed) return false;
+
+  const state = await getChatState(env, chatId);
+
+  if (parsed.action === "cancel") {
+    await clearExpenseFlow(env, chatId);
+    await answerCallbackQuery(env, callbackQueryId, "Operacion cancelada.");
+    await sendMessage(env, chatId, "Creacion de gasto cancelada.");
+    return true;
+  }
+
+  if (!state.auth) {
+    await answerCallbackQuery(env, callbackQueryId, "Debes iniciar sesion primero.");
+    return true;
+  }
+
+  const flow = state.expenseFlow;
+  if (!flow) {
+    await answerCallbackQuery(env, callbackQueryId, "No hay ningun gasto en curso. Usa /gasto.");
+    return true;
+  }
+
+  switch (parsed.action) {
+    case "category": {
+      const category = parsed.value as ExpenseCategory | null;
+      if (!category || !EXPENSE_CATEGORIES.includes(category)) {
+        await answerCallbackQuery(env, callbackQueryId, "Categoria invalida.");
+        return true;
+      }
+      await answerCallbackQuery(env, callbackQueryId);
+      await transitionExpenseFlow(env, chatId, {
+        step: getNextStepAfterCategory(category),
+        draft: {
+          categoria: category,
+          tipo: category === "OTROS" || category === "COMIDA" ? "PUNTUAL" : undefined,
+        },
+      });
+      return true;
+    }
+    case "transport": {
+      if (flow.step !== "transport_type") {
+        await answerCallbackQuery(env, callbackQueryId, "Paso invalido.");
+        return true;
+      }
+      const transport = parsed.value ? TRANSPORT_CALLBACK_VALUES[parsed.value] : undefined;
+      if (!transport) {
+        await answerCallbackQuery(env, callbackQueryId, "Tipo de transporte invalido.");
+        return true;
+      }
+      await answerCallbackQuery(env, callbackQueryId);
+      await transitionExpenseFlow(env, chatId, {
+        step: "price",
+        draft: { ...flow.draft, tipo_transporte: transport },
+      });
+      return true;
+    }
+    case "kind": {
+      if (flow.step !== "kind") {
+        await answerCallbackQuery(env, callbackQueryId, "Paso invalido.");
+        return true;
+      }
+      const kind = parsed.value as ExpenseKind | null;
+      if (!kind || !EXPENSE_KINDS.includes(kind)) {
+        await answerCallbackQuery(env, callbackQueryId, "Tipo de gasto invalido.");
+        return true;
+      }
+      await answerCallbackQuery(env, callbackQueryId);
+      await transitionExpenseFlow(env, chatId, {
+        step: "payment_method",
+        draft: { ...flow.draft, tipo: kind },
+      });
+      return true;
+    }
+    case "payment": {
+      if (flow.step !== "payment_method") {
+        await answerCallbackQuery(env, callbackQueryId, "Paso invalido.");
+        return true;
+      }
+      const payment = parsed.value ? PAYMENT_CALLBACK_VALUES[parsed.value] : undefined;
+      if (!payment || !PAYMENT_METHODS.includes(payment)) {
+        await answerCallbackQuery(env, callbackQueryId, "Forma de pago invalida.");
+        return true;
+      }
+      await answerCallbackQuery(env, callbackQueryId);
+      await transitionExpenseFlow(env, chatId, {
+        step: "confirm",
+        draft: { ...flow.draft, forma_pago: payment },
+      });
+      return true;
+    }
+    case "confirm": {
+      if (flow.step !== "confirm") {
+        await answerCallbackQuery(env, callbackQueryId, "Paso invalido.");
+        return true;
+      }
+      const draft = flow.draft;
+      if (!draft.categoria || !draft.precio || !draft.fecha || !draft.tipo || !draft.forma_pago) {
+        await answerCallbackQuery(env, callbackQueryId, "Faltan datos del gasto.");
+        return true;
+      }
+
+      await answerCallbackQuery(env, callbackQueryId);
+      try {
+        const response = await createFinancialExpense(
+          state.auth,
+          {
+            categoria: draft.categoria,
+            nombre: draft.nombre,
+            precio: draft.precio,
+            fecha: draft.fecha,
+            tipo: draft.tipo,
+            forma_pago: draft.forma_pago,
+            tipo_transporte: draft.tipo_transporte,
+            ubicacion: draft.ubicacion,
+          },
+          env,
+        );
+        await setAuthSession(env, chatId, state.auth);
+        await clearExpenseFlow(env, chatId);
+        await sendMessage(
+          env,
+          chatId,
+          `${response.message}\n\n${buildExpenseSummary(draft)}\n\nID transaccion: ${response.transaction.id}`,
+        );
+      } catch (error) {
+        await setExpenseFlow(env, chatId, flow);
+        await sendMessage(env, chatId, `No se pudo guardar el gasto: ${error instanceof Error ? error.message : "Error desconocido."}`);
+      }
+      return true;
+    }
+    default:
+      await answerCallbackQuery(env, callbackQueryId, "Accion invalida.");
+      return true;
+  }
 }
 
 async function handleCallbackQuery(env: Env, callbackQuery: TelegramCallbackQuery): Promise<void> {
@@ -196,8 +615,11 @@ async function handleCallbackQuery(env: Env, callbackQuery: TelegramCallbackQuer
 
   assertPrivateChat(config, chat.id, chat.type);
   const callbackData = callbackQuery.data ?? "";
-  const offset = await parseSignedHistoryCursor(callbackData, config.botSessionSecret);
 
+  const handledExpense = await handleExpenseCallback(env, chat.id, callbackQuery.id, callbackData);
+  if (handledExpense) return;
+
+  const offset = await parseSignedHistoryCursor(callbackData, config.botSessionSecret);
   if (offset === null) {
     await answerCallbackQuery(env, callbackQuery.id, "Cursor invalido.");
     return;

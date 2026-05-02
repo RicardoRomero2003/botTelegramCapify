@@ -6,6 +6,7 @@ function createDefaultState(): BotChatState {
   return {
     auth: null,
     loginFlow: null,
+    expenseFlow: null,
     history: null,
   };
 }
@@ -22,6 +23,7 @@ export function setAuthSession(chatId: number, auth: BotAuthSession): void {
   const state = getChatState(chatId);
   state.auth = auth;
   state.loginFlow = null;
+  state.expenseFlow = null;
   state.history = null;
 }
 
@@ -34,6 +36,7 @@ export function clearAuthSession(chatId: number): void {
 export function startLoginFlow(chatId: number): void {
   const state = getChatState(chatId);
   state.loginFlow = { step: "usuario" };
+  state.expenseFlow = null;
 }
 
 export function setLoginUsuario(chatId: number, usuario: string): void {

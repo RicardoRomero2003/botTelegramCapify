@@ -1,4 +1,10 @@
-import type { BotAuthSession, ExpenseHistoryPage, FinancialMovement } from "./lib/types.js";
+import type {
+  BotAuthSession,
+  ExpenseHistoryPage,
+  FinancialExpenseCreatePayload,
+  FinancialExpenseCreateResponse,
+  FinancialMovement,
+} from "./lib/types.js";
 import { getWorkerConfig } from "./worker-config.js";
 import { fetchAuthenticatedUser, refreshSupabaseSession } from "./worker-supabase.js";
 
@@ -35,6 +41,32 @@ async function authorizedFetch(path: string, session: BotAuthSession, env: Env):
     headers: {
       Authorization: `Bearer ${session.accessToken}`,
     },
+  });
+
+  return response;
+}
+
+async function authorizedRequest(path: string, session: BotAuthSession, env: Env, init: RequestInit): Promise<Response> {
+  const config = getWorkerConfig(env);
+  const headers = new Headers(init.headers ?? {});
+  headers.set("Authorization", `Bearer ${session.accessToken}`);
+
+  let response = await fetch(`${config.capifyApiBaseUrl}${path}`, {
+    ...init,
+    headers,
+  });
+
+  if (response.status !== 401) return response;
+
+  const refreshed = await refreshSupabaseSession(session.refreshToken, env);
+  session.accessToken = refreshed.accessToken;
+  session.refreshToken = refreshed.refreshToken;
+  session.user = await fetchAuthenticatedUser(session.accessToken, env);
+
+  headers.set("Authorization", `Bearer ${session.accessToken}`);
+  response = await fetch(`${config.capifyApiBaseUrl}${path}`, {
+    ...init,
+    headers,
   });
 
   return response;
@@ -78,4 +110,24 @@ export async function getExpenseHistoryPage(session: BotAuthSession, startOffset
     nextOffset: offset,
     exhausted,
   };
+}
+
+export async function createFinancialExpense(
+  session: BotAuthSession,
+  payload: FinancialExpenseCreatePayload,
+  env: Env,
+): Promise<FinancialExpenseCreateResponse> {
+  const response = await authorizedRequest("/financial-settings/me/expenses", session, env, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return (await response.json()) as FinancialExpenseCreateResponse;
 }
