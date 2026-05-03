@@ -8,6 +8,12 @@ import type {
 import { getWorkerConfig } from "./worker-config.js";
 import { fetchAuthenticatedUser, refreshSupabaseSession } from "./worker-supabase.js";
 
+function compareMovementsDesc(a: FinancialMovement, b: FinancialMovement): number {
+  const dateA = `${a.fecha_operacion}|${a.created_at}|${a.id}`;
+  const dateB = `${b.fecha_operacion}|${b.created_at}|${b.id}`;
+  return dateA < dateB ? 1 : dateA > dateB ? -1 : 0;
+}
+
 async function parseError(response: Response): Promise<string> {
   const bodyText = await response.text().catch(() => "");
   if (!bodyText) return `Error ${response.status}`;
@@ -85,7 +91,7 @@ export async function getExpenseHistoryPage(session: BotAuthSession, startOffset
     }
 
     const payload = (await response.json()) as { items?: FinancialMovement[] };
-    const items = Array.isArray(payload.items) ? payload.items : [];
+    const items = (Array.isArray(payload.items) ? payload.items : []).sort(compareMovementsDesc);
 
     if (items.length === 0) {
       exhausted = true;
@@ -106,7 +112,7 @@ export async function getExpenseHistoryPage(session: BotAuthSession, startOffset
   }
 
   return {
-    expenses: expenses.slice(0, pageSize),
+    expenses: expenses.slice(0, pageSize).sort(compareMovementsDesc),
     nextOffset: offset,
     exhausted,
   };

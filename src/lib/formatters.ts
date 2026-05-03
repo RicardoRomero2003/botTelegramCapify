@@ -33,9 +33,9 @@ export function formatWelcome(): string {
     "Comandos disponibles:",
     "/login — iniciar sesion",
     "/logout — cerrar sesion",
-    "/historial — ver los ultimos 20 gastos",
+    "/historial — ver los 20 gastos mas recientes",
     "/gasto — registrar un gasto guiado",
-    "/mas — cargar los siguientes 20 gastos",
+    "/mas — cargar los 20 gastos anteriores",
   ].join("\n");
 }
 
@@ -58,7 +58,7 @@ export function formatExpenseHistory(page: ExpenseHistoryPage, startIndex: numbe
     return "No hay mas gastos para mostrar.";
   }
 
-  const lines = [`Historial de gastos (${startIndex + 1}-${startIndex + page.expenses.length}):`, ""];
+  const lines = [`Historial de gastos mas recientes (${startIndex + 1}-${startIndex + page.expenses.length}):`, ""];
   page.expenses.forEach((expense, index) => {
     lines.push(`${startIndex + index + 1}. ${formatExpenseItem(expense)}`);
   });
@@ -66,7 +66,7 @@ export function formatExpenseHistory(page: ExpenseHistoryPage, startIndex: numbe
   if (page.exhausted) {
     lines.push("", "Fin del historial.");
   } else {
-    lines.push("", "Usa /mas o el boton 'Mas gastos' para cargar los siguientes 20.");
+    lines.push("", "Usa /mas o el boton 'Mas gastos' para cargar los 20 gastos anteriores.");
   }
 
   return lines.join("\n");
