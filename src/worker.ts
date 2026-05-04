@@ -49,6 +49,7 @@ type TelegramUpdate = {
 };
 
 const EXPENSE_CALLBACK_PREFIX = "expense";
+const APP_CALLBACK_PREFIX = "app";
 const EXPENSE_CATEGORIES: ExpenseCategory[] = ["DEPORTE", "TRANSPORTE", "OCIO", "COMIDA", "OTROS"];
 const TRANSPORT_TYPES: ExpenseTransportType[] = ["Transporte Publico", "Uber", "Gasolina"];
 const EXPENSE_KINDS: ExpenseKind[] = ["MENSUALIDAD", "PUNTUAL"];
@@ -90,6 +91,16 @@ function parseExpenseCallback(value: string): { action: string; value: string | 
     action: parts[1] ?? "",
     value: parts.slice(2).join(":") || null,
   };
+}
+
+function buildAppCallback(platform: "android" | "ios"): string {
+  return `${APP_CALLBACK_PREFIX}:${platform}`;
+}
+
+function parseAppCallback(value: string): "android" | "ios" | null {
+  if (value === `${APP_CALLBACK_PREFIX}:android`) return "android";
+  if (value === `${APP_CALLBACK_PREFIX}:ios`) return "ios";
+  return null;
 }
 
 function categoryKeyboard() {
@@ -141,6 +152,15 @@ function confirmKeyboard() {
     inline_keyboard: [
       [{ text: "Confirmar", callback_data: buildExpenseCallback("confirm") }],
       [{ text: "Cancelar", callback_data: buildExpenseCallback("cancel") }],
+    ],
+  };
+}
+
+function appKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Android", callback_data: buildAppCallback("android") }],
+      [{ text: "iPhone", callback_data: buildAppCallback("ios") }],
     ],
   };
 }
@@ -463,6 +483,9 @@ async function handleCommand(env: Env, chatId: number, message: TelegramMessage)
       await transitionExpenseFlow(env, chatId, { step: "category", draft: {} });
       return true;
     }
+    case "app":
+      await sendMessage(env, chatId, "Selecciona la plataforma para la instalacion de Capify.", appKeyboard());
+      return true;
     default:
       return false;
   }
@@ -635,6 +658,26 @@ async function handleCallbackQuery(env: Env, callbackQuery: TelegramCallbackQuer
 
   const handledExpense = await handleExpenseCallback(env, chat.id, callbackQuery.id, callbackData);
   if (handledExpense) return;
+
+  const appPlatform = parseAppCallback(callbackData);
+  if (appPlatform) {
+    await answerCallbackQuery(env, callbackQuery.id);
+    if (appPlatform === "android") {
+      await sendMessage(
+        env,
+        chat.id,
+        "Android seleccionado. Todavia no hay un APK publicado desde el bot. El siguiente paso sera generar y alojar el build para poder descargarlo aqui.",
+      );
+      return;
+    }
+
+    await sendMessage(
+      env,
+      chat.id,
+      "iPhone seleccionado. Todavia no hay un instalable iOS publicado desde el bot. El siguiente paso sera generar el build firmado y dejar el enlace listo aqui.",
+    );
+    return;
+  }
 
   const cursor = await parseSignedHistoryCursor(callbackData, config.botSessionSecret);
   if (cursor === null) {

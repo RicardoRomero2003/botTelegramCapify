@@ -35,6 +35,7 @@ export function formatWelcome(): string {
     "/logout — cerrar sesion",
     "/historial — ver los 20 gastos mas recientes",
     "/gasto — registrar un gasto guiado",
+    "/app — elegir plataforma para instalar la app",
     "/mas — cargar los 20 gastos anteriores",
   ].join("\n");
 }
