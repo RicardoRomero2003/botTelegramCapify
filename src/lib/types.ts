@@ -54,6 +54,7 @@ export type BotChatState = {
   expenseFlow: ExpenseFlowState | null;
   history: {
     nextOffset: number;
+    shownCount: number;
     exhausted: boolean;
   } | null;
 };
@@ -71,6 +72,7 @@ export type FinancialMovement = {
 export type ExpenseHistoryPage = {
   expenses: FinancialMovement[];
   nextOffset: number;
+  consumedCount: number;
   exhausted: boolean;
 };
 

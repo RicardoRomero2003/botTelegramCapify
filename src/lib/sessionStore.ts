@@ -49,7 +49,7 @@ export function clearLoginFlow(chatId: number): void {
   state.loginFlow = null;
 }
 
-export function setHistoryCursor(chatId: number, nextOffset: number, exhausted: boolean): void {
+export function setHistoryCursor(chatId: number, nextOffset: number, shownCount: number, exhausted: boolean): void {
   const state = getChatState(chatId);
-  state.history = { nextOffset, exhausted };
+  state.history = { nextOffset, shownCount, exhausted };
 }

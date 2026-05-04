@@ -77,8 +77,14 @@ export async function clearExpenseFlow(env: Env, chatId: number): Promise<void> 
   await saveChatState(env, chatId, state);
 }
 
-export async function setHistoryCursor(env: Env, chatId: number, nextOffset: number, exhausted: boolean): Promise<void> {
+export async function setHistoryCursor(
+  env: Env,
+  chatId: number,
+  nextOffset: number,
+  shownCount: number,
+  exhausted: boolean,
+): Promise<void> {
   const state = await getChatState(env, chatId);
-  state.history = { nextOffset, exhausted };
+  state.history = { nextOffset, shownCount, exhausted };
   await saveChatState(env, chatId, state);
 }

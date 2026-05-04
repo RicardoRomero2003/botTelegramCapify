@@ -18,23 +18,28 @@ async function sign(payload: string, secret: string): Promise<string> {
   return toHex(signature).slice(0, 16);
 }
 
-export async function buildSignedHistoryCursor(offset: number, secret: string): Promise<string> {
-  const payload = `historial:${offset}`;
+export async function buildSignedHistoryCursor(offset: number, shownCount: number, secret: string): Promise<string> {
+  const payload = `historial:${offset}:${shownCount}`;
   return `${payload}:${await sign(payload, secret)}`;
 }
 
-export async function parseSignedHistoryCursor(value: string, secret: string): Promise<number | null> {
-  const match = value.match(/^historial:(\d+):([a-f0-9]{16})$/);
+export async function parseSignedHistoryCursor(
+  value: string,
+  secret: string,
+): Promise<{ offset: number; shownCount: number } | null> {
+  const match = value.match(/^historial:(\d+):(\d+):([a-f0-9]{16})$/);
   if (!match) return null;
 
-  const [, offsetRaw, signature] = match;
-  const payload = `historial:${offsetRaw}`;
+  const [, offsetRaw, shownCountRaw, signature] = match;
+  const payload = `historial:${offsetRaw}:${shownCountRaw}`;
   const expected = await sign(payload, secret);
   if (expected !== signature) return null;
 
   const offset = Number(offsetRaw);
+  const shownCount = Number(shownCountRaw);
   if (!Number.isFinite(offset) || offset < 0) return null;
-  return offset;
+  if (!Number.isFinite(shownCount) || shownCount < 0) return null;
+  return { offset, shownCount };
 }
 
 export async function buildWebhookSecret(secret: string): Promise<string> {

@@ -22,24 +22,26 @@ function ensurePrivateChat(chatId: number, chatType?: string): void {
   }
 }
 
-function historyKeyboard(nextOffset: number) {
+function historyKeyboard(nextOffset: number, shownCount: number) {
   return Markup.inlineKeyboard([
-    Markup.button.callback("Mas gastos", buildSignedHistoryCursor(nextOffset)),
+    Markup.button.callback("Mas gastos", buildSignedHistoryCursor(nextOffset, shownCount)),
   ]);
 }
 
-async function sendHistoryPage(chatId: number, offset: number): Promise<{ text: string; nextOffset: number; exhausted: boolean }> {
+async function sendHistoryPage(chatId: number, offset: number, shownCount: number): Promise<{ text: string; nextOffset: number; shownCount: number; exhausted: boolean }> {
   const state = getChatState(chatId);
   if (!state.auth) {
     throw new Error("Debes iniciar sesion primero con /login.");
   }
 
   const page = await getExpenseHistoryPage(state.auth, offset, 20);
-  setHistoryCursor(chatId, page.nextOffset, page.exhausted);
+  const nextShownCount = shownCount + page.consumedCount;
+  setHistoryCursor(chatId, page.nextOffset, nextShownCount, page.exhausted);
 
   return {
-    text: formatExpenseHistory(page, offset),
+    text: formatExpenseHistory(page, shownCount),
     nextOffset: page.nextOffset,
+    shownCount: nextShownCount,
     exhausted: page.exhausted,
   };
 }
@@ -80,8 +82,8 @@ bot.command("logout", async (ctx) => {
 
 bot.command("historial", async (ctx) => {
   ensurePrivateChat(ctx.chat.id, ctx.chat.type);
-  const result = await sendHistoryPage(ctx.chat.id, 0);
-  await ctx.reply(result.text, result.exhausted ? undefined : historyKeyboard(result.nextOffset));
+  const result = await sendHistoryPage(ctx.chat.id, 0, 0);
+  await ctx.reply(result.text, result.exhausted ? undefined : historyKeyboard(result.nextOffset, result.shownCount));
 });
 
 bot.command("mas", async (ctx) => {
@@ -100,8 +102,8 @@ bot.command("mas", async (ctx) => {
     return;
   }
 
-  const result = await sendHistoryPage(ctx.chat.id, state.history.nextOffset);
-  await ctx.reply(result.text, result.exhausted ? undefined : historyKeyboard(result.nextOffset));
+  const result = await sendHistoryPage(ctx.chat.id, state.history.nextOffset, state.history.shownCount);
+  await ctx.reply(result.text, result.exhausted ? undefined : historyKeyboard(result.nextOffset, result.shownCount));
 });
 
 bot.on("callback_query", async (ctx) => {
@@ -109,16 +111,16 @@ bot.on("callback_query", async (ctx) => {
   if (!chatId) return;
   ensurePrivateChat(chatId, ctx.chat?.type);
   const callbackData = "data" in ctx.callbackQuery ? ctx.callbackQuery.data : "";
-  const offset = parseSignedHistoryCursor(callbackData);
+  const cursor = parseSignedHistoryCursor(callbackData);
 
-  if (offset === null) {
+  if (cursor === null) {
     await ctx.answerCbQuery("Cursor invalido.", { show_alert: false });
     return;
   }
 
-  const result = await sendHistoryPage(chatId, offset);
+  const result = await sendHistoryPage(chatId, cursor.offset, cursor.shownCount);
   await ctx.answerCbQuery();
-  await ctx.reply(result.text, result.exhausted ? undefined : historyKeyboard(result.nextOffset));
+  await ctx.reply(result.text, result.exhausted ? undefined : historyKeyboard(result.nextOffset, result.shownCount));
 });
 
 bot.on("text", async (ctx) => {

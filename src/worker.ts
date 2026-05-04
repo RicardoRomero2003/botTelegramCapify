@@ -145,9 +145,9 @@ function confirmKeyboard() {
   };
 }
 
-async function historyKeyboard(secret: string, nextOffset: number) {
+async function historyKeyboard(secret: string, nextOffset: number, shownCount: number) {
   return {
-    inline_keyboard: [[{ text: "Mas gastos", callback_data: await buildSignedHistoryCursor(nextOffset, secret) }]],
+    inline_keyboard: [[{ text: "Mas gastos", callback_data: await buildSignedHistoryCursor(nextOffset, shownCount, secret) }]],
   };
 }
 
@@ -265,7 +265,12 @@ async function transitionExpenseFlow(env: Env, chatId: number, flow: ExpenseFlow
   await sendExpenseStepPrompt(env, chatId, flow);
 }
 
-async function sendHistoryPage(env: Env, chatId: number, offset: number): Promise<{ text: string; nextOffset: number; exhausted: boolean }> {
+async function sendHistoryPage(
+  env: Env,
+  chatId: number,
+  offset: number,
+  shownCount: number,
+): Promise<{ text: string; nextOffset: number; shownCount: number; exhausted: boolean }> {
   const state = await getChatState(env, chatId);
   if (!state.auth) {
     throw new Error("Debes iniciar sesion primero con /login.");
@@ -273,11 +278,13 @@ async function sendHistoryPage(env: Env, chatId: number, offset: number): Promis
 
   const page = await getExpenseHistoryPage(state.auth, offset, 20, env);
   await setAuthSession(env, chatId, state.auth);
-  await setHistoryCursor(env, chatId, page.nextOffset, page.exhausted);
+  const nextShownCount = shownCount + page.consumedCount;
+  await setHistoryCursor(env, chatId, page.nextOffset, nextShownCount, page.exhausted);
 
   return {
-    text: formatExpenseHistory(page, offset),
+    text: formatExpenseHistory(page, shownCount),
     nextOffset: page.nextOffset,
+    shownCount: nextShownCount,
     exhausted: page.exhausted,
   };
 }
@@ -414,8 +421,13 @@ async function handleCommand(env: Env, chatId: number, message: TelegramMessage)
       await sendMessage(env, chatId, "Sesion cerrada.");
       return true;
     case "historial": {
-      const result = await sendHistoryPage(env, chatId, 0);
-      await sendMessage(env, chatId, result.text, result.exhausted ? undefined : await historyKeyboard(config.botSessionSecret, result.nextOffset));
+      const result = await sendHistoryPage(env, chatId, 0, 0);
+      await sendMessage(
+        env,
+        chatId,
+        result.text,
+        result.exhausted ? undefined : await historyKeyboard(config.botSessionSecret, result.nextOffset, result.shownCount),
+      );
       return true;
     }
     case "mas": {
@@ -433,8 +445,13 @@ async function handleCommand(env: Env, chatId: number, message: TelegramMessage)
         return true;
       }
 
-      const result = await sendHistoryPage(env, chatId, state.history.nextOffset);
-      await sendMessage(env, chatId, result.text, result.exhausted ? undefined : await historyKeyboard(config.botSessionSecret, result.nextOffset));
+      const result = await sendHistoryPage(env, chatId, state.history.nextOffset, state.history.shownCount);
+      await sendMessage(
+        env,
+        chatId,
+        result.text,
+        result.exhausted ? undefined : await historyKeyboard(config.botSessionSecret, result.nextOffset, result.shownCount),
+      );
       return true;
     }
     case "gasto": {
@@ -619,15 +636,20 @@ async function handleCallbackQuery(env: Env, callbackQuery: TelegramCallbackQuer
   const handledExpense = await handleExpenseCallback(env, chat.id, callbackQuery.id, callbackData);
   if (handledExpense) return;
 
-  const offset = await parseSignedHistoryCursor(callbackData, config.botSessionSecret);
-  if (offset === null) {
+  const cursor = await parseSignedHistoryCursor(callbackData, config.botSessionSecret);
+  if (cursor === null) {
     await answerCallbackQuery(env, callbackQuery.id, "Cursor invalido.");
     return;
   }
 
-  const result = await sendHistoryPage(env, chat.id, offset);
+  const result = await sendHistoryPage(env, chat.id, cursor.offset, cursor.shownCount);
   await answerCallbackQuery(env, callbackQuery.id);
-  await sendMessage(env, chat.id, result.text, result.exhausted ? undefined : await historyKeyboard(config.botSessionSecret, result.nextOffset));
+  await sendMessage(
+    env,
+    chat.id,
+    result.text,
+    result.exhausted ? undefined : await historyKeyboard(config.botSessionSecret, result.nextOffset, result.shownCount),
+  );
 }
 
 async function handleTelegramUpdate(env: Env, update: TelegramUpdate): Promise<void> {

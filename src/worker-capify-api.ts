@@ -81,10 +81,9 @@ async function authorizedRequest(path: string, session: BotAuthSession, env: Env
 export async function getExpenseHistoryPage(session: BotAuthSession, startOffset: number, pageSize: number, env: Env): Promise<ExpenseHistoryPage> {
   const expenses: FinancialMovement[] = [];
   let offset = Math.max(0, startOffset);
-  let exhausted = false;
   const batchSize = 100;
 
-  while (expenses.length < pageSize && !exhausted) {
+  while (true) {
     const response = await authorizedFetch(`/financial-settings/me/transactions?limit=${batchSize}&offset=${offset}`, session, env);
     if (!response.ok) {
       throw new Error(await parseError(response));
@@ -94,28 +93,40 @@ export async function getExpenseHistoryPage(session: BotAuthSession, startOffset
     const items = (Array.isArray(payload.items) ? payload.items : []).sort(compareMovementsDesc);
 
     if (items.length === 0) {
-      exhausted = true;
-      break;
+      return {
+        expenses,
+        nextOffset: offset,
+        consumedCount: expenses.length,
+        exhausted: true,
+      };
     }
 
-    for (const item of items) {
+    for (const [index, item] of items.entries()) {
       if (String(item.tipo).toLowerCase() === "gasto") {
         expenses.push(item);
-        if (expenses.length >= pageSize) break;
+        if (expenses.length >= pageSize) {
+          const nextOffset = offset + index + 1;
+          const exhausted = nextOffset >= offset + items.length && items.length < batchSize;
+          return {
+            expenses,
+            nextOffset,
+            consumedCount: expenses.length,
+            exhausted,
+          };
+        }
       }
     }
 
     offset += items.length;
     if (items.length < batchSize) {
-      exhausted = true;
+      return {
+        expenses,
+        nextOffset: offset,
+        consumedCount: expenses.length,
+        exhausted: true,
+      };
     }
   }
-
-  return {
-    expenses: expenses.slice(0, pageSize).sort(compareMovementsDesc),
-    nextOffset: offset,
-    exhausted,
-  };
 }
 
 export async function createFinancialExpense(
