@@ -5,6 +5,7 @@ export type WorkerConfig = {
   supabasePublishableKey: string;
   capifyApiBaseUrl: string;
   botSessionSecret: string;
+  telegramAppUrl: string;
 };
 
 function readRequired(value: string | undefined, name: string): string {
@@ -43,5 +44,6 @@ export function getWorkerConfig(env: Env): WorkerConfig {
     supabasePublishableKey,
     capifyApiBaseUrl: readRequired(env.CAPIFY_API_BASE_URL, "CAPIFY_API_BASE_URL").replace(/\/$/, ""),
     botSessionSecret: readRequired(env.BOT_SESSION_SECRET, "BOT_SESSION_SECRET"),
+    telegramAppUrl: ((env as unknown as Record<string, string | undefined>).TELEGRAM_APP_URL ?? "").trim(),
   };
 }

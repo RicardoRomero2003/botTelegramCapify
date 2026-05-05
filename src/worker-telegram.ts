@@ -1,7 +1,7 @@
 import { getWorkerConfig } from "./worker-config.js";
 
 type InlineKeyboardMarkup = {
-  inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+  inline_keyboard: Array<Array<{ text: string; callback_data?: string; web_app?: { url: string } }>>;
 };
 
 type BotCommand = {

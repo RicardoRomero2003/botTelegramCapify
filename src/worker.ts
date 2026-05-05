@@ -28,7 +28,7 @@ import {
   setLoginUsuario,
   startLoginFlow,
 } from "./worker-session-store.js";
-import { signInWithSupabase } from "./worker-supabase.js";
+import { fetchAuthenticatedUser, refreshSupabaseSession, signInWithSupabase } from "./worker-supabase.js";
 import { answerCallbackQuery, deleteMessage, sendMessage } from "./worker-telegram.js";
 
 type TelegramChat = {
@@ -190,13 +190,88 @@ function confirmKeyboard() {
   };
 }
 
-function appKeyboard() {
+function appKeyboard(appUrl: string) {
+  if (appUrl) {
+    return {
+      inline_keyboard: [
+        [{ text: "Abrir Capify", web_app: { url: appUrl } }],
+        [{ text: "Android", callback_data: buildAppCallback("android") }],
+        [{ text: "iPhone", callback_data: buildAppCallback("ios") }],
+      ],
+    };
+  }
+
   return {
     inline_keyboard: [
       [{ text: "Android", callback_data: buildAppCallback("android") }],
       [{ text: "iPhone", callback_data: buildAppCallback("ios") }],
     ],
   };
+}
+
+function corsHeaders(): HeadersInit {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "86400",
+  };
+}
+
+function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
+  return Response.json(payload, {
+    ...init,
+    headers: {
+      ...corsHeaders(),
+      ...(init.headers ?? {}),
+    },
+  });
+}
+
+async function hmacSha256Bytes(keyBytes: Uint8Array, data: string): Promise<Uint8Array> {
+  const rawKey = new Uint8Array(keyBytes).buffer;
+  const key = await crypto.subtle.importKey("raw", rawKey, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
+  return new Uint8Array(signature);
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function safeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function validateTelegramInitData(initData: string, botToken: string): Promise<{ id: number; username?: string; first_name?: string }> {
+  const params = new URLSearchParams(initData);
+  const receivedHash = params.get("hash") ?? "";
+  if (!receivedHash) throw new Error("Telegram initData no incluye hash.");
+
+  const authDate = Number(params.get("auth_date") ?? "0");
+  if (!Number.isFinite(authDate) || authDate <= 0) throw new Error("Telegram initData no incluye auth_date valido.");
+  const maxAgeSeconds = 60 * 10;
+  if (Math.floor(Date.now() / 1000) - authDate > maxAgeSeconds) throw new Error("La sesion de Telegram ha caducado. Vuelve a abrir la app desde el bot.");
+
+  params.delete("hash");
+  const dataCheckString = [...params.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+
+  // Telegram Mini Apps: secret_key = HMAC_SHA256(bot_token, "WebAppData").
+  const secretKey = await hmacSha256Bytes(new TextEncoder().encode("WebAppData"), botToken);
+  const computedHash = bytesToHex(await hmacSha256Bytes(secretKey, dataCheckString));
+  if (!safeEqualHex(computedHash, receivedHash)) throw new Error("Firma de Telegram invalida.");
+
+  const userRaw = params.get("user");
+  if (!userRaw) throw new Error("Telegram initData no incluye usuario.");
+  const user = JSON.parse(userRaw) as { id?: number; username?: string; first_name?: string };
+  if (!user.id || !Number.isFinite(user.id)) throw new Error("Usuario de Telegram invalido.");
+  return { id: user.id, username: user.username, first_name: user.first_name };
 }
 
 function incomeTargetKeyboard() {
@@ -640,7 +715,14 @@ async function handleCommand(env: Env, chatId: number, message: TelegramMessage)
       return true;
     }
     case "app":
-      await sendMessage(env, chatId, "Selecciona la plataforma para la instalacion de Capify.", appKeyboard());
+      await sendMessage(
+        env,
+        chatId,
+        config.telegramAppUrl
+          ? "Abre Capify dentro de Telegram o selecciona la plataforma para instalacion nativa."
+          : "Selecciona la plataforma para la instalacion de Capify.",
+        appKeyboard(config.telegramAppUrl),
+      );
       return true;
     default:
       return false;
@@ -970,12 +1052,69 @@ async function handleTelegramUpdate(env: Env, update: TelegramUpdate): Promise<v
   }
 }
 
+async function handleTelegramAppSession(request: Request, env: Env): Promise<Response> {
+  const config = getWorkerConfig(env);
+  let initData = "";
+  try {
+    const payload = (await request.json()) as { initData?: string };
+    initData = (payload.initData ?? "").trim();
+  } catch {
+    return jsonResponse({ detail: "Payload invalido." }, { status: 400 });
+  }
+
+  if (!initData) {
+    return jsonResponse({ detail: "Abre la app desde Telegram para validar la sesion." }, { status: 400 });
+  }
+
+  let telegramUser: { id: number; username?: string; first_name?: string };
+  try {
+    telegramUser = await validateTelegramInitData(initData, config.telegramBotToken);
+  } catch (error) {
+    return jsonResponse({ detail: error instanceof Error ? error.message : "No se pudo validar Telegram." }, { status: 401 });
+  }
+
+  if (!isChatAllowed(config, telegramUser.id)) {
+    return jsonResponse({ detail: "Este usuario de Telegram no esta autorizado." }, { status: 403 });
+  }
+
+  const state = await getChatState(env, telegramUser.id);
+  if (!state.auth) {
+    return jsonResponse({ detail: "Debes iniciar sesion primero en el bot con /login." }, { status: 401 });
+  }
+
+  try {
+    // Refresh opportunistically so the Mini App gets a usable token even if the bot has been idle.
+    const refreshed = await refreshSupabaseSession(state.auth.refreshToken, env);
+    state.auth.accessToken = refreshed.accessToken;
+    state.auth.refreshToken = refreshed.refreshToken;
+    state.auth.user = await fetchAuthenticatedUser(state.auth.accessToken, env);
+    await setAuthSession(env, telegramUser.id, state.auth);
+  } catch {
+    // If refresh fails, still return the existing token; downstream API calls will reject expired sessions.
+  }
+
+  return jsonResponse({
+    ok: true,
+    user: state.auth.user,
+    accessToken: state.auth.accessToken,
+    apiBaseUrl: config.capifyApiBaseUrl,
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders() });
+    }
+
     if (request.method === "GET" && url.pathname === "/health") {
       return Response.json({ ok: true, service: "capify-telegram-bot" });
+    }
+
+    if (request.method === "POST" && url.pathname === "/telegram/app-session") {
+      return handleTelegramAppSession(request, env);
     }
 
     if (request.method === "POST" && url.pathname === "/telegram/webhook") {
