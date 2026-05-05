@@ -167,7 +167,7 @@ function appKeyboard() {
 
 async function historyKeyboard(secret: string, nextOffset: number, shownCount: number) {
   return {
-    inline_keyboard: [[{ text: "Mas gastos", callback_data: await buildSignedHistoryCursor(nextOffset, shownCount, secret) }]],
+    inline_keyboard: [[{ text: "Mas transacciones", callback_data: await buildSignedHistoryCursor(nextOffset, shownCount, secret) }]],
   };
 }
 
@@ -461,7 +461,7 @@ async function handleCommand(env: Env, chatId: number, message: TelegramMessage)
         return true;
       }
       if (state.history.exhausted) {
-        await sendMessage(env, chatId, "No hay mas gastos para mostrar.");
+        await sendMessage(env, chatId, "No hay mas transacciones para mostrar.");
         return true;
       }
 

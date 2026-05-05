@@ -33,10 +33,10 @@ export function formatWelcome(): string {
     "Comandos disponibles:",
     "/login — iniciar sesion",
     "/logout — cerrar sesion",
-    "/historial — ver los 20 gastos mas recientes",
+    "/historial — ver las 20 transacciones mas recientes",
     "/gasto — registrar un gasto guiado",
     "/app — elegir plataforma para instalar la app",
-    "/mas — cargar los 20 gastos anteriores",
+    "/mas — cargar las 20 transacciones anteriores",
   ].join("\n");
 }
 
@@ -49,17 +49,33 @@ export function formatLoggedUser(user: AuthenticatedUser): string {
   ].join("\n");
 }
 
+function transactionMarker(tipo: string): string {
+  const normalized = String(tipo).toLowerCase();
+  if (normalized === "ingreso") return "🟢";
+  if (normalized === "transferencia") return "🔵";
+  return "🔴";
+}
+
+function transactionLabel(tipo: string): string {
+  const normalized = String(tipo).toLowerCase();
+  if (normalized === "ingreso") return "Ingreso";
+  if (normalized === "transferencia") return "Transferencia";
+  return "Gasto";
+}
+
 export function formatExpenseItem(expense: FinancialMovement): string {
-  const title = expense.descripcion?.trim() || `Gasto ${normalizeCategory(expense.categoria)}`;
-  return `• ${formatDate(expense.fecha_operacion)} | ${normalizeCategory(expense.categoria)} | ${title} | ${formatAmount(expense.monto)}`;
+  const title =
+    expense.descripcion?.trim() ||
+    `${transactionLabel(expense.tipo)} ${normalizeCategory(expense.categoria)}`;
+  return `${transactionMarker(expense.tipo)} ${formatDate(expense.fecha_operacion)} | ${transactionLabel(expense.tipo)} | ${normalizeCategory(expense.categoria)} | ${title} | ${formatAmount(expense.monto)}`;
 }
 
 export function formatExpenseHistory(page: ExpenseHistoryPage, startIndex: number): string {
   if (page.expenses.length === 0) {
-    return "No hay mas gastos para mostrar.";
+    return "No hay mas transacciones para mostrar.";
   }
 
-  const lines = [`Historial de gastos mas recientes (${startIndex + 1}-${startIndex + page.expenses.length}):`, ""];
+  const lines = [`Historial de transacciones mas recientes (${startIndex + 1}-${startIndex + page.expenses.length}):`, ""];
   page.expenses.forEach((expense, index) => {
     lines.push(`${startIndex + index + 1}. ${formatExpenseItem(expense)}`);
   });
@@ -67,7 +83,7 @@ export function formatExpenseHistory(page: ExpenseHistoryPage, startIndex: numbe
   if (page.exhausted) {
     lines.push("", "Fin del historial.");
   } else {
-    lines.push("", "Usa /mas o el boton 'Mas gastos' para cargar los 20 gastos anteriores.");
+    lines.push("", "Usa /mas o el boton 'Mas transacciones' para cargar las 20 transacciones anteriores.");
   }
 
   return lines.join("\n");

@@ -79,54 +79,23 @@ async function authorizedRequest(path: string, session: BotAuthSession, env: Env
 }
 
 export async function getExpenseHistoryPage(session: BotAuthSession, startOffset: number, pageSize: number, env: Env): Promise<ExpenseHistoryPage> {
-  const expenses: FinancialMovement[] = [];
   let offset = Math.max(0, startOffset);
-  const batchSize = 100;
-
-  while (true) {
-    const response = await authorizedFetch(`/financial-settings/me/transactions?limit=${batchSize}&offset=${offset}`, session, env);
-    if (!response.ok) {
-      throw new Error(await parseError(response));
-    }
-
-    const payload = (await response.json()) as { items?: FinancialMovement[] };
-    const items = (Array.isArray(payload.items) ? payload.items : []).sort(compareMovementsDesc);
-
-    if (items.length === 0) {
-      return {
-        expenses,
-        nextOffset: offset,
-        consumedCount: expenses.length,
-        exhausted: true,
-      };
-    }
-
-    for (const [index, item] of items.entries()) {
-      if (String(item.tipo).toLowerCase() === "gasto") {
-        expenses.push(item);
-        if (expenses.length >= pageSize) {
-          const nextOffset = offset + index + 1;
-          const exhausted = nextOffset >= offset + items.length && items.length < batchSize;
-          return {
-            expenses,
-            nextOffset,
-            consumedCount: expenses.length,
-            exhausted,
-          };
-        }
-      }
-    }
-
-    offset += items.length;
-    if (items.length < batchSize) {
-      return {
-        expenses,
-        nextOffset: offset,
-        consumedCount: expenses.length,
-        exhausted: true,
-      };
-    }
+  const response = await authorizedFetch(`/financial-settings/me/transactions?limit=${pageSize}&offset=${offset}`, session, env);
+  if (!response.ok) {
+    throw new Error(await parseError(response));
   }
+
+  const payload = (await response.json()) as { items?: FinancialMovement[] };
+  const items = (Array.isArray(payload.items) ? payload.items : []).sort(compareMovementsDesc);
+  const consumedCount = items.length;
+  offset += consumedCount;
+
+  return {
+    expenses: items,
+    nextOffset: offset,
+    consumedCount,
+    exhausted: consumedCount < pageSize,
+  };
 }
 
 export async function createFinancialExpense(
