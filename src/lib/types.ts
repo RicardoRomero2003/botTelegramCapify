@@ -17,6 +17,8 @@ export type ExpenseCategory = "DEPORTE" | "TRANSPORTE" | "OCIO" | "COMIDA" | "OT
 export type ExpenseKind = "MENSUALIDAD" | "PUNTUAL";
 export type ExpensePaymentMethod = "Cuenta de gastos" | "Tarjeta de Ineco";
 export type ExpenseTransportType = "Transporte Publico" | "Uber" | "Gasolina";
+export type IncomeTarget = "Capital ahorrado" | "Capital a invertir" | "Capital disponible para gastos" | "Tarjeta de Ineco";
+export type IncomeMethod = "Bizum" | "Transferencia";
 
 export type ExpenseDraft = {
   categoria?: ExpenseCategory;
@@ -43,6 +45,19 @@ export type ExpenseFlowState = {
   draft: ExpenseDraft;
 };
 
+export type IncomeDraft = {
+  ingresar_en?: IncomeTarget;
+  monto?: number;
+  descripcion?: string;
+  metodo?: IncomeMethod;
+  nombre_remitente?: string;
+};
+
+export type IncomeFlowState = {
+  step: "target" | "amount" | "description" | "method" | "sender" | "confirm";
+  draft: IncomeDraft;
+};
+
 export type BotChatState = {
   auth: BotAuthSession | null;
   loginFlow:
@@ -50,8 +65,9 @@ export type BotChatState = {
     | {
         step: "usuario" | "password";
         usuario?: string;
-      };
+  };
   expenseFlow: ExpenseFlowState | null;
+  incomeFlow: IncomeFlowState | null;
   history: {
     nextOffset: number;
     shownCount: number;
@@ -89,6 +105,20 @@ export type FinancialExpenseCreatePayload = {
 
 export type FinancialExpenseCreateResponse = {
   expense_id: number;
+  message: string;
+  transaction: FinancialMovement;
+};
+
+export type FinancialIncomeCreatePayload = {
+  ingresar_en: string;
+  monto: number;
+  descripcion: string;
+  metodo: string;
+  nombre_remitente: string;
+};
+
+export type FinancialIncomeCreateResponse = {
+  income_id: number;
   message: string;
   transaction: FinancialMovement;
 };

@@ -35,6 +35,7 @@ export function formatWelcome(): string {
     "/logout — cerrar sesion",
     "/historial — ver las 20 transacciones mas recientes",
     "/gasto — registrar un gasto guiado",
+    "/ingreso — registrar un ingreso guiado",
     "/app — elegir plataforma para instalar la app",
     "/mas — cargar las 20 transacciones anteriores",
   ].join("\n");

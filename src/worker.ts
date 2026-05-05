@@ -7,18 +7,24 @@ import type {
   ExpenseKind,
   ExpensePaymentMethod,
   ExpenseTransportType,
+  IncomeDraft,
+  IncomeFlowState,
+  IncomeMethod,
+  IncomeTarget,
 } from "./lib/types.js";
 import { buildSignedHistoryCursor, buildWebhookSecret, parseSignedHistoryCursor } from "./worker-crypto.js";
-import { createFinancialExpense, getExpenseHistoryPage } from "./worker-capify-api.js";
+import { createFinancialExpense, createFinancialIncome, getExpenseHistoryPage } from "./worker-capify-api.js";
 import { getWorkerConfig } from "./worker-config.js";
 import {
   clearAuthSession,
   clearExpenseFlow,
+  clearIncomeFlow,
   clearLoginFlow,
   getChatState,
   setAuthSession,
   setExpenseFlow,
   setHistoryCursor,
+  setIncomeFlow,
   setLoginUsuario,
   startLoginFlow,
 } from "./worker-session-store.js";
@@ -49,11 +55,14 @@ type TelegramUpdate = {
 };
 
 const EXPENSE_CALLBACK_PREFIX = "expense";
+const INCOME_CALLBACK_PREFIX = "income";
 const APP_CALLBACK_PREFIX = "app";
 const EXPENSE_CATEGORIES: ExpenseCategory[] = ["DEPORTE", "TRANSPORTE", "OCIO", "COMIDA", "OTROS"];
 const TRANSPORT_TYPES: ExpenseTransportType[] = ["Transporte Publico", "Uber", "Gasolina"];
 const EXPENSE_KINDS: ExpenseKind[] = ["MENSUALIDAD", "PUNTUAL"];
 const PAYMENT_METHODS: ExpensePaymentMethod[] = ["Cuenta de gastos", "Tarjeta de Ineco"];
+const INCOME_TARGETS: IncomeTarget[] = ["Capital ahorrado", "Capital a invertir", "Capital disponible para gastos", "Tarjeta de Ineco"];
+const INCOME_METHODS: IncomeMethod[] = ["Bizum", "Transferencia"];
 
 const TRANSPORT_CALLBACK_VALUES: Record<string, ExpenseTransportType> = {
   TRANSPORTE_PUBLICO: "Transporte Publico",
@@ -64,6 +73,18 @@ const TRANSPORT_CALLBACK_VALUES: Record<string, ExpenseTransportType> = {
 const PAYMENT_CALLBACK_VALUES: Record<string, ExpensePaymentMethod> = {
   CUENTA_GASTOS: "Cuenta de gastos",
   TARJETA_INECO: "Tarjeta de Ineco",
+};
+
+const INCOME_TARGET_CALLBACK_VALUES: Record<string, IncomeTarget> = {
+  CAPITAL_AHORRADO: "Capital ahorrado",
+  CAPITAL_INVERTIR: "Capital a invertir",
+  CAPITAL_GASTOS: "Capital disponible para gastos",
+  TARJETA_INECO: "Tarjeta de Ineco",
+};
+
+const INCOME_METHOD_CALLBACK_VALUES: Record<string, IncomeMethod> = {
+  BIZUM: "Bizum",
+  TRANSFERENCIA: "Transferencia",
 };
 
 function isChatAllowed(config: ReturnType<typeof getWorkerConfig>, chatId: number): boolean {
@@ -87,6 +108,19 @@ function buildExpenseCallback(action: string, value?: string): string {
 function parseExpenseCallback(value: string): { action: string; value: string | null } | null {
   const parts = value.split(":");
   if (parts[0] !== EXPENSE_CALLBACK_PREFIX || parts.length < 2) return null;
+  return {
+    action: parts[1] ?? "",
+    value: parts.slice(2).join(":") || null,
+  };
+}
+
+function buildIncomeCallback(action: string, value?: string): string {
+  return value ? `${INCOME_CALLBACK_PREFIX}:${action}:${value}` : `${INCOME_CALLBACK_PREFIX}:${action}`;
+}
+
+function parseIncomeCallback(value: string): { action: string; value: string | null } | null {
+  const parts = value.split(":");
+  if (parts[0] !== INCOME_CALLBACK_PREFIX || parts.length < 2) return null;
   return {
     action: parts[1] ?? "",
     value: parts.slice(2).join(":") || null,
@@ -161,6 +195,37 @@ function appKeyboard() {
     inline_keyboard: [
       [{ text: "Android", callback_data: buildAppCallback("android") }],
       [{ text: "iPhone", callback_data: buildAppCallback("ios") }],
+    ],
+  };
+}
+
+function incomeTargetKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Capital ahorrado", callback_data: buildIncomeCallback("target", "CAPITAL_AHORRADO") }],
+      [{ text: "Capital a invertir", callback_data: buildIncomeCallback("target", "CAPITAL_INVERTIR") }],
+      [{ text: "Capital disponible para gastos", callback_data: buildIncomeCallback("target", "CAPITAL_GASTOS") }],
+      [{ text: "Tarjeta de Ineco", callback_data: buildIncomeCallback("target", "TARJETA_INECO") }],
+      [{ text: "Cancelar", callback_data: buildIncomeCallback("cancel") }],
+    ],
+  };
+}
+
+function incomeMethodKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Bizum", callback_data: buildIncomeCallback("method", "BIZUM") }],
+      [{ text: "Transferencia", callback_data: buildIncomeCallback("method", "TRANSFERENCIA") }],
+      [{ text: "Cancelar", callback_data: buildIncomeCallback("cancel") }],
+    ],
+  };
+}
+
+function incomeConfirmKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "Confirmar", callback_data: buildIncomeCallback("confirm") }],
+      [{ text: "Cancelar", callback_data: buildIncomeCallback("cancel") }],
     ],
   };
 }
@@ -248,6 +313,17 @@ function buildExpenseSummary(draft: ExpenseDraft): string {
   return lines.join("\n");
 }
 
+function buildIncomeSummary(draft: IncomeDraft): string {
+  const lines = ["Resumen del ingreso:", ""];
+  lines.push(`Ingresar en: ${draft.ingresar_en ?? "-"}`);
+  if (typeof draft.monto === "number") lines.push(`Monto: ${formatAmount(draft.monto)}`);
+  if (draft.descripcion) lines.push(`Descripcion: ${draft.descripcion}`);
+  if (draft.metodo) lines.push(`Metodo: ${draft.metodo}`);
+  if (draft.nombre_remitente) lines.push(`Nombre del remitente: ${draft.nombre_remitente}`);
+  lines.push("", "Confirma para guardar el ingreso o cancela para descartarlo.");
+  return lines.join("\n");
+}
+
 async function sendExpenseStepPrompt(env: Env, chatId: number, flow: ExpenseFlowState): Promise<void> {
   switch (flow.step) {
     case "category":
@@ -280,9 +356,37 @@ async function sendExpenseStepPrompt(env: Env, chatId: number, flow: ExpenseFlow
   }
 }
 
+async function sendIncomeStepPrompt(env: Env, chatId: number, flow: IncomeFlowState): Promise<void> {
+  switch (flow.step) {
+    case "target":
+      await sendMessage(env, chatId, "Selecciona donde quieres ingresar el dinero.", incomeTargetKeyboard());
+      return;
+    case "amount":
+      await sendMessage(env, chatId, "Introduce el monto del ingreso. Ejemplo: 25,50");
+      return;
+    case "description":
+      await sendMessage(env, chatId, "Introduce la descripcion del ingreso.");
+      return;
+    case "method":
+      await sendMessage(env, chatId, "Selecciona el metodo del ingreso.", incomeMethodKeyboard());
+      return;
+    case "sender":
+      await sendMessage(env, chatId, "Introduce el nombre del remitente.");
+      return;
+    case "confirm":
+      await sendMessage(env, chatId, buildIncomeSummary(flow.draft), incomeConfirmKeyboard());
+      return;
+  }
+}
+
 async function transitionExpenseFlow(env: Env, chatId: number, flow: ExpenseFlowState): Promise<void> {
   await setExpenseFlow(env, chatId, flow);
   await sendExpenseStepPrompt(env, chatId, flow);
+}
+
+async function transitionIncomeFlow(env: Env, chatId: number, flow: IncomeFlowState): Promise<void> {
+  await setIncomeFlow(env, chatId, flow);
+  await sendIncomeStepPrompt(env, chatId, flow);
 }
 
 async function sendHistoryPage(
@@ -408,6 +512,48 @@ async function handleExpenseFlowText(env: Env, state: BotChatState, chatId: numb
   }
 }
 
+async function handleIncomeFlowText(env: Env, state: BotChatState, chatId: number, message: TelegramMessage): Promise<boolean> {
+  const flow = state.incomeFlow;
+  if (!flow || !message.text) return false;
+
+  const text = message.text.trim();
+  if (!text) {
+    await sendMessage(env, chatId, "Texto vacio. Intentalo otra vez.");
+    return true;
+  }
+
+  switch (flow.step) {
+    case "amount": {
+      const amount = parsePrice(text);
+      if (amount === null) {
+        await sendMessage(env, chatId, "Introduce un monto valido mayor que 0.");
+        return true;
+      }
+      await transitionIncomeFlow(env, chatId, {
+        step: "description",
+        draft: { ...flow.draft, monto: amount },
+      });
+      return true;
+    }
+    case "description": {
+      await transitionIncomeFlow(env, chatId, {
+        step: "method",
+        draft: { ...flow.draft, descripcion: text },
+      });
+      return true;
+    }
+    case "sender": {
+      await transitionIncomeFlow(env, chatId, {
+        step: "confirm",
+        draft: { ...flow.draft, nombre_remitente: text },
+      });
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
 async function handleCommand(env: Env, chatId: number, message: TelegramMessage): Promise<boolean> {
   const config = getWorkerConfig(env);
   const text = message.text?.trim();
@@ -437,6 +583,7 @@ async function handleCommand(env: Env, chatId: number, message: TelegramMessage)
     case "logout":
       await clearLoginFlow(env, chatId);
       await clearExpenseFlow(env, chatId);
+      await clearIncomeFlow(env, chatId);
       await clearAuthSession(env, chatId);
       await sendMessage(env, chatId, "Sesion cerrada.");
       return true;
@@ -483,6 +630,15 @@ async function handleCommand(env: Env, chatId: number, message: TelegramMessage)
       await transitionExpenseFlow(env, chatId, { step: "category", draft: {} });
       return true;
     }
+    case "ingreso": {
+      const state = await getChatState(env, chatId);
+      if (!state.auth) {
+        await sendMessage(env, chatId, "Debes iniciar sesion primero con /login.");
+        return true;
+      }
+      await transitionIncomeFlow(env, chatId, { step: "target", draft: {} });
+      return true;
+    }
     case "app":
       await sendMessage(env, chatId, "Selecciona la plataforma para la instalacion de Capify.", appKeyboard());
       return true;
@@ -505,6 +661,9 @@ async function handleMessage(env: Env, message: TelegramMessage): Promise<void> 
 
   const handledExpenseFlow = await handleExpenseFlowText(env, state, chatId, message);
   if (handledExpenseFlow) return;
+
+  const handledIncomeFlow = await handleIncomeFlowText(env, state, chatId, message);
+  if (handledIncomeFlow) return;
 }
 
 async function handleExpenseCallback(env: Env, chatId: number, callbackQueryId: string, callbackData: string): Promise<boolean> {
@@ -645,6 +804,108 @@ async function handleExpenseCallback(env: Env, chatId: number, callbackQueryId: 
   }
 }
 
+async function handleIncomeCallback(env: Env, chatId: number, callbackQueryId: string, callbackData: string): Promise<boolean> {
+  const parsed = parseIncomeCallback(callbackData);
+  if (!parsed) return false;
+
+  const state = await getChatState(env, chatId);
+
+  if (parsed.action === "cancel") {
+    await clearIncomeFlow(env, chatId);
+    await answerCallbackQuery(env, callbackQueryId, "Operacion cancelada.");
+    await sendMessage(env, chatId, "Creacion de ingreso cancelada.");
+    return true;
+  }
+
+  if (!state.auth) {
+    await answerCallbackQuery(env, callbackQueryId, "Debes iniciar sesion primero.");
+    return true;
+  }
+
+  const flow = state.incomeFlow;
+  if (!flow) {
+    await answerCallbackQuery(env, callbackQueryId, "No hay ningun ingreso en curso. Usa /ingreso.");
+    return true;
+  }
+
+  switch (parsed.action) {
+    case "target": {
+      if (flow.step !== "target") {
+        await answerCallbackQuery(env, callbackQueryId, "Paso invalido.");
+        return true;
+      }
+      const target = parsed.value ? INCOME_TARGET_CALLBACK_VALUES[parsed.value] : undefined;
+      if (!target || !INCOME_TARGETS.includes(target)) {
+        await answerCallbackQuery(env, callbackQueryId, "Destino de ingreso invalido.");
+        return true;
+      }
+      await answerCallbackQuery(env, callbackQueryId);
+      await transitionIncomeFlow(env, chatId, {
+        step: "amount",
+        draft: { ...flow.draft, ingresar_en: target },
+      });
+      return true;
+    }
+    case "method": {
+      if (flow.step !== "method") {
+        await answerCallbackQuery(env, callbackQueryId, "Paso invalido.");
+        return true;
+      }
+      const method = parsed.value ? INCOME_METHOD_CALLBACK_VALUES[parsed.value] : undefined;
+      if (!method || !INCOME_METHODS.includes(method)) {
+        await answerCallbackQuery(env, callbackQueryId, "Metodo de ingreso invalido.");
+        return true;
+      }
+      await answerCallbackQuery(env, callbackQueryId);
+      await transitionIncomeFlow(env, chatId, {
+        step: "sender",
+        draft: { ...flow.draft, metodo: method },
+      });
+      return true;
+    }
+    case "confirm": {
+      if (flow.step !== "confirm") {
+        await answerCallbackQuery(env, callbackQueryId, "Paso invalido.");
+        return true;
+      }
+      const draft = flow.draft;
+      if (!draft.ingresar_en || !draft.monto || !draft.descripcion || !draft.metodo || !draft.nombre_remitente) {
+        await answerCallbackQuery(env, callbackQueryId, "Faltan datos del ingreso.");
+        return true;
+      }
+
+      await answerCallbackQuery(env, callbackQueryId);
+      try {
+        const response = await createFinancialIncome(
+          state.auth,
+          {
+            ingresar_en: draft.ingresar_en,
+            monto: draft.monto,
+            descripcion: draft.descripcion,
+            metodo: draft.metodo,
+            nombre_remitente: draft.nombre_remitente,
+          },
+          env,
+        );
+        await setAuthSession(env, chatId, state.auth);
+        await clearIncomeFlow(env, chatId);
+        await sendMessage(
+          env,
+          chatId,
+          `${response.message}\n\n${buildIncomeSummary(draft)}\n\nID transaccion: ${response.transaction.id}`,
+        );
+      } catch (error) {
+        await setIncomeFlow(env, chatId, flow);
+        await sendMessage(env, chatId, `No se pudo guardar el ingreso: ${error instanceof Error ? error.message : "Error desconocido."}`);
+      }
+      return true;
+    }
+    default:
+      await answerCallbackQuery(env, callbackQueryId, "Accion invalida.");
+      return true;
+  }
+}
+
 async function handleCallbackQuery(env: Env, callbackQuery: TelegramCallbackQuery): Promise<void> {
   const config = getWorkerConfig(env);
   const chat = callbackQuery.message?.chat;
@@ -658,6 +919,9 @@ async function handleCallbackQuery(env: Env, callbackQuery: TelegramCallbackQuer
 
   const handledExpense = await handleExpenseCallback(env, chat.id, callbackQuery.id, callbackData);
   if (handledExpense) return;
+
+  const handledIncome = await handleIncomeCallback(env, chat.id, callbackQuery.id, callbackData);
+  if (handledIncome) return;
 
   const appPlatform = parseAppCallback(callbackData);
   if (appPlatform) {

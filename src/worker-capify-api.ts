@@ -3,6 +3,8 @@ import type {
   ExpenseHistoryPage,
   FinancialExpenseCreatePayload,
   FinancialExpenseCreateResponse,
+  FinancialIncomeCreatePayload,
+  FinancialIncomeCreateResponse,
   FinancialMovement,
 } from "./lib/types.js";
 import { getWorkerConfig } from "./worker-config.js";
@@ -116,4 +118,24 @@ export async function createFinancialExpense(
   }
 
   return (await response.json()) as FinancialExpenseCreateResponse;
+}
+
+export async function createFinancialIncome(
+  session: BotAuthSession,
+  payload: FinancialIncomeCreatePayload,
+  env: Env,
+): Promise<FinancialIncomeCreateResponse> {
+  const response = await authorizedRequest("/financial-settings/me/incomes", session, env, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseError(response));
+  }
+
+  return (await response.json()) as FinancialIncomeCreateResponse;
 }

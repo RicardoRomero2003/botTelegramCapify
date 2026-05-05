@@ -1,4 +1,4 @@
-import type { BotAuthSession, BotChatState, ExpenseFlowState } from "./lib/types.js";
+import type { BotAuthSession, BotChatState, ExpenseFlowState, IncomeFlowState } from "./lib/types.js";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 
@@ -7,6 +7,7 @@ function createDefaultState(): BotChatState {
     auth: null,
     loginFlow: null,
     expenseFlow: null,
+    incomeFlow: null,
     history: null,
   };
 }
@@ -34,6 +35,7 @@ export async function setAuthSession(env: Env, chatId: number, auth: BotAuthSess
   state.auth = auth;
   state.loginFlow = null;
   state.expenseFlow = null;
+  state.incomeFlow = null;
   state.history = null;
   await saveChatState(env, chatId, state);
 }
@@ -49,6 +51,7 @@ export async function startLoginFlow(env: Env, chatId: number): Promise<void> {
   const state = await getChatState(env, chatId);
   state.loginFlow = { step: "usuario" };
   state.expenseFlow = null;
+  state.incomeFlow = null;
   await saveChatState(env, chatId, state);
 }
 
@@ -67,6 +70,7 @@ export async function clearLoginFlow(env: Env, chatId: number): Promise<void> {
 export async function setExpenseFlow(env: Env, chatId: number, expenseFlow: ExpenseFlowState): Promise<void> {
   const state = await getChatState(env, chatId);
   state.expenseFlow = expenseFlow;
+  state.incomeFlow = null;
   state.loginFlow = null;
   await saveChatState(env, chatId, state);
 }
@@ -74,6 +78,20 @@ export async function setExpenseFlow(env: Env, chatId: number, expenseFlow: Expe
 export async function clearExpenseFlow(env: Env, chatId: number): Promise<void> {
   const state = await getChatState(env, chatId);
   state.expenseFlow = null;
+  await saveChatState(env, chatId, state);
+}
+
+export async function setIncomeFlow(env: Env, chatId: number, incomeFlow: IncomeFlowState): Promise<void> {
+  const state = await getChatState(env, chatId);
+  state.incomeFlow = incomeFlow;
+  state.expenseFlow = null;
+  state.loginFlow = null;
+  await saveChatState(env, chatId, state);
+}
+
+export async function clearIncomeFlow(env: Env, chatId: number): Promise<void> {
+  const state = await getChatState(env, chatId);
+  state.incomeFlow = null;
   await saveChatState(env, chatId, state);
 }
 
